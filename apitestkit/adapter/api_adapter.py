@@ -16,6 +16,8 @@ from apitestkit.core.logger import logger_manager, create_user_logger
 from apitestkit.core.config import config_manager
 from apitestkit.core.exceptions import ApiTestKitError
 from apitestkit.core.data_storage import data_storage_manager
+from apitestkit.performance import performance as create_performance_runner
+from apitestkit.performance.performance_runner import PerformanceRunner
 
 
 class ApiAdapter:
@@ -47,6 +49,14 @@ class ApiAdapter:
         self._tags = []
         self._test_context = {}
         self._last_record_id = None
+        
+        # 性能测试相关配置
+        self._performance_runner = None
+        self._performance_request_config = None
+        
+        # 盲顺序调用相关配置
+        self._request_queue = []
+        self._blind_order_mode = False
         
         if test_name:
             self._test_name = test_name
@@ -81,6 +91,12 @@ class ApiAdapter:
         self._tags = []
         self._test_context = {}
         self._last_record_id = None
+        
+        # 性能测试相关状态
+        self._performance_request_config = None
+        
+        # 盲顺序调用相关状态
+        self._request_queue = []
     
     def _setup_logger(self, test_name: str):
         """
@@ -119,6 +135,18 @@ class ApiAdapter:
         self._step_name = name
         logger_manager.info(f"[框架] 执行步骤: {name}")
         return self
+    
+    def step_name(self, name):
+        """
+        设置测试步骤名称（step方法的别名）
+        
+        Args:
+            name: 步骤名称
+            
+        Returns:
+            self: 返回实例自身以支持链式调用
+        """
+        return self.step(name)
     
     def get(self, url):
         """
@@ -849,8 +877,21 @@ class ApiAdapter:
                     response_data['stream_chunks'] = self._stream_buffer
                     response_data['stream_content'] = self.get_full_stream_content()
                 
-                # 保存到数据存储
-                self._last_record_id = data_storage_manager.save_response(response_data)
+                # 保存到数据存储 - 调整参数以匹配store_response方法
+                request_info = {
+                    'url': url,
+                    'method': self._method,
+                    'params': self._params,
+                    'headers': self._headers,
+                    'status_code': self._response.status_code,
+                    'response_time': self._response_time
+                }
+                self._last_record_id = data_storage_manager.store_response(
+                    self._response, 
+                    request_info,
+                    tags=self._tags,
+                    metadata={'test_name': self._test_name, 'step_name': self._step_name, 'context': self._test_context}
+                )
                 logger_manager.debug(f"[框架] 响应数据已保存，记录ID: {self._last_record_id}")
             except Exception as storage_error:
                 logger_manager.error(f"[框架] 响应数据存储失败: {str(storage_error)}")
@@ -1718,6 +1759,149 @@ class ApiAdapter:
         """
         self._async_mode = False
         return self
+        
+    def _save_request_config(self):
+        """
+        保存当前请求配置，用于性能测试
+        
+        Returns:
+            Dict[str, Any]: 请求配置字典
+        """
+        self._performance_request_config = {
+            'url': self._url,
+            'method': self._method,
+            'headers': self._headers.copy(),
+            'params': self._params.copy(),
+            'data': self._data,
+            'json': self._json,
+            'files': self._files,
+            'cookies': self._cookies.copy(),
+            'auth': self._auth,
+            'timeout': self._timeout,
+            'verify': self._verify_ssl,
+            'proxies': self._proxies,
+            'stream': self._is_stream,
+            'stream_handler': self._stream_handler,
+            'agent_params': self._agent_params.copy(),
+            'pre_request_hooks': self._pre_request_hooks.copy(),
+            'post_response_hooks': self._post_response_hooks.copy(),
+            'base_url': self._base_url
+        }
+        return self._performance_request_config
+        
+    def enable_blind_order(self):
+        """
+        启用盲顺序调用模式
+        
+        Returns:
+            self: 返回实例自身以支持链式调用
+        """
+        self._blind_order_mode = True
+        logger_manager.info(f"[框架] 盲顺序调用模式已启用")
+        return self
+        
+    def disable_blind_order(self):
+        """
+        禁用盲顺序调用模式
+        
+        Returns:
+            self: 返回实例自身以支持链式调用
+        """
+        self._blind_order_mode = False
+        logger_manager.info(f"[框架] 盲顺序调用模式已禁用")
+        return self
+        
+    def queue_request(self):
+        """
+        将当前请求加入队列，用于盲顺序执行
+        
+        Returns:
+            self: 返回实例自身以支持链式调用
+        """
+        request_config = self._save_request_config()
+        self._request_queue.append({
+            'config': request_config,
+            'step_name': self._step_name
+        })
+        logger_manager.info(f"[框架] 请求已加入队列: {self._step_name} - {self._method} {self._url}")
+        # 重置状态以便配置下一个请求
+        self._reset_state()
+        return self
+        
+    def execute_queue(self):
+        """
+        执行队列中的所有请求（盲顺序执行）
+        
+        Returns:
+            self: 返回实例自身以支持链式调用
+        """
+        results = []
+        logger_manager.info(f"[框架] 开始执行请求队列，共 {len(self._request_queue)} 个请求")
+        
+        for i, req in enumerate(self._request_queue):
+            logger_manager.info(f"[框架] 执行队列请求 {i+1}/{len(self._request_queue)}: {req['step_name']}")
+            
+            # 恢复请求配置
+            config = req['config']
+            self._url = config['url']
+            self._method = config['method']
+            self._headers = config['headers'].copy()
+            self._params = config['params'].copy()
+            self._data = config['data']
+            self._json = config['json']
+            self._files = config['files']
+            self._cookies = config['cookies'].copy()
+            self._auth = config['auth']
+            self._timeout = config['timeout']
+            self._verify_ssl = config['verify']
+            self._proxies = config['proxies']
+            self._is_stream = config['stream']
+            self._stream_handler = config['stream_handler']
+            self._agent_params = config['agent_params'].copy()
+            self._pre_request_hooks = config['pre_request_hooks'].copy()
+            self._post_response_hooks = config['post_response_hooks'].copy()
+            self._base_url = config['base_url']
+            
+            # 发送请求
+            result = self.send()
+            results.append(result)
+        
+        logger_manager.info(f"[框架] 请求队列执行完成")
+        # 清空队列
+        self._request_queue = []
+        return self
+        
+    def performance(self):
+        """
+        创建性能测试运行器并配置
+        
+        Returns:
+            PerformanceRunner: 配置好的性能测试运行器
+        """
+        # 保存当前请求配置
+        request_config = self._save_request_config()
+        
+        # 创建性能测试运行器
+        runner = create_performance_runner()
+        
+        # 配置性能测试运行器的请求信息
+        runner.set_request(
+            method=self._method,
+            url=self._url,
+            headers=self._headers,
+            params=self._params,
+            data=self._data,
+            json=self._json,
+            cookies=self._cookies,
+            auth=self._auth,
+            timeout=self._timeout,
+            verify=self._verify_ssl,
+            proxies=self._proxies,
+            base_url=self._base_url
+        )
+        
+        logger_manager.info(f"[框架] 性能测试运行器已创建，配置请求: {self._method} {self._url}")
+        return runner
 
 
 def api():

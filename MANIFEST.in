@@ -1,0 +1,31 @@
+# MANIFEST.in
+# 定义构建分发包时需要包含的非Python文件
+
+# 包含README文件
+include README.md
+
+# 包含LICENSE文件
+include LICENSE
+
+# 包含pyproject.toml文件
+include pyproject.toml
+
+# 包含apitestkit包中的py.typed文件
+include apitestkit/py.typed
+
+# 如果有文档文件，包含docs目录
+# recursive-include docs *
+
+# 如果有测试文件，可以选择性包含
+# recursive-include tests *.py
+
+# 排除不需要的文件
+exclude *.pyc
+exclude __pycache__/*
+prune .git
+prune .svn
+prune .hg
+prune .tox
+prune .venv
+prune venv
+prune *.egg-info

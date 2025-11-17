@@ -64,6 +64,24 @@ class DataStorageManager:
         except Exception as e:
             logger_manager.error(f"[框架] 初始化数据库失败: {str(e)}")
     
+    def save_response(self, response: Any, request_info: Dict[str, Any], 
+                      tags: Optional[List[str]] = None, 
+                      metadata: Optional[Dict[str, Any]] = None):
+        """
+        保存API响应数据（store_response的别名方法）
+        
+        Args:
+            response: API响应对象或响应数据
+            request_info: 请求信息字典，包含url、method、params、headers等
+            tags: 数据标签列表，用于分类和检索
+            metadata: 附加元数据
+            
+        Returns:
+            int: 存储记录的ID
+        """
+        # 直接调用store_response方法
+        return self.store_response(response, request_info, tags, metadata)
+        
     def store_response(self, response: Any, request_info: Dict[str, Any], 
                       tags: Optional[List[str]] = None, 
                       metadata: Optional[Dict[str, Any]] = None):
