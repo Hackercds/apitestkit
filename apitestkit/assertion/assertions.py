@@ -29,7 +29,9 @@ class AssertionResult:
 
 class AssertionError(Exception):
     """
-    断言错误异常类
+    断言错误异常类 - 注意：与Python内置AssertionError不同
+    为避免与内置异常冲突，框架内使用时导入完整路径：
+    from apitestkit.assertion.assertions import AssertionError as ApiAssertionError
     """
     def __init__(self, message, assertion_type=None, expected=None, actual=None):
         self.assertion_type = assertion_type

@@ -1903,6 +1903,171 @@ class ApiAdapter:
         logger_manager.info(f"[框架] 性能测试运行器已创建，配置请求: {self._method} {self._url}")
         return runner
 
+    def to_tool_schema(self) -> Dict[str, Any]:
+        """
+        将API适配器转换为MCP工具schema格式
+
+        Returns:
+            Dict[str, Any]: MCP工具schema字典，包含name、description、parameters等字段
+        """
+        # 构建参数schema
+        properties = {
+            "url": {
+                "type": "string",
+                "description": "请求URL"
+            },
+            "method": {
+                "type": "string",
+                "description": "HTTP方法",
+                "enum": ["GET", "POST", "PUT", "DELETE", "PATCH"]
+            }
+        }
+
+        # 如果有headers则添加
+        if self._headers:
+            properties["headers"] = {
+                "type": "object",
+                "description": "HTTP请求头"
+            }
+
+        # 如果有params则添加
+        if self._params:
+            properties["params"] = {
+                "type": "object",
+                "description": "URL查询参数"
+            }
+
+        # 如果有json则添加
+        if self._json:
+            properties["json"] = {
+                "type": "object",
+                "description": "JSON请求体"
+            }
+
+        # 如果有data则添加
+        if self._data:
+            properties["data"] = {
+                "type": "string",
+                "description": "表单数据"
+            }
+
+        schema = {
+            "name": self._test_name.replace(" ", "_").lower(),
+            "description": f"API测试工具: {self._test_name} - {self._step_name}",
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": ["url", "method"] if not self._url else ["method"]
+            }
+        }
+
+        logger_manager.debug(f"[框架] 转换为MCP工具schema: {schema['name']}")
+        return schema
+
+    def execute_tool(self, tool_name: str = None, **kwargs) -> Dict[str, Any]:
+        """
+        执行MCP工具调用 - 标准化接口供Agent/MCP使用
+
+        Args:
+            tool_name: 工具名称（可选）
+            **kwargs: 工具参数，包含url、method、headers、params、json、data、assertions等
+
+        Returns:
+            Dict[str, Any]: 标准化的工具执行结果
+        """
+        # 解析参数
+        url = kwargs.get("url", self._url)
+        method = kwargs.get("method", self._method)
+        headers = kwargs.get("headers", self._headers)
+        params = kwargs.get("params", self._params)
+        json_data = kwargs.get("json", self._json)
+        data = kwargs.get("data", self._data)
+        assertions = kwargs.get("assertions", [])
+
+        # 保存原始状态
+        orig_url, orig_method = self._url, self._method
+        orig_headers, orig_params = self._headers.copy(), self._params.copy()
+        orig_json, orig_data = self._json, self._data
+
+        try:
+            # 使用当前实例的配置执行请求
+            self._url = url
+            self._method = method
+            if headers:
+                self._headers.update(headers)
+            if params:
+                self._params.update(params)
+            if json_data:
+                self._json = json_data
+            if data:
+                self._data = data
+
+            # 执行请求
+            self.send()
+
+            # 构建结果
+            result = {
+                "success": self._response is not None and 200 <= self._response.status_code < 300,
+                "status_code": self._response.status_code if self._response else None,
+                "response_body": None,
+                "response_time_ms": self._response_time,
+                "assertion_results": [],
+                "extracted_variables": self._variables.copy(),
+                "error": None
+            }
+
+            # 解析响应体
+            if self._response:
+                try:
+                    result["response_body"] = self._response.json()
+                except (ValueError, TypeError):
+                    result["response_body"] = self._response.text
+
+            # 执行传入的断言
+            for assertion in assertions:
+                assertion_result = {"type": assertion.get("type"), "passed": False, "message": ""}
+                try:
+                    if assertion.get("type") == "status_code":
+                        expected = assertion.get("expected")
+                        assertion_result["passed"] = self._response.status_code == expected
+                        assertion_result["message"] = f"status_code {expected}" + (" ✓" if assertion_result["passed"] else f" ✗ got {self._response.status_code}")
+                    elif assertion.get("type") == "json_path":
+                        path = assertion.get("path")
+                        expected = assertion.get("expected")
+                        actual = self._extract_from_json(result["response_body"], path) if isinstance(result["response_body"], dict) else None
+                        assertion_result["passed"] = actual == expected
+                        assertion_result["message"] = f"json_path {path} = {expected}" + (" ✓" if assertion_result["passed"] else f" ✗ got {actual}")
+                    elif assertion.get("type") == "contains":
+                        expected = assertion.get("expected")
+                        text = result["response_body"] if isinstance(result["response_body"], str) else str(result["response_body"])
+                        assertion_result["passed"] = expected in text
+                        assertion_result["message"] = f"contains '{expected}'" + (" ✓" if assertion_result["passed"] else " ✗")
+                except Exception as e:
+                    assertion_result["message"] = f"assertion error: {str(e)}"
+                result["assertion_results"].append(assertion_result)
+
+            logger_manager.info(f"[框架] MCP工具执行完成: {tool_name or 'api_tool'}, status={result['status_code']}")
+            return result
+
+        except Exception as e:
+            logger_manager.error(f"[框架] MCP工具执行失败: {str(e)}")
+            return {
+                "success": False,
+                "status_code": None,
+                "response_body": None,
+                "response_time_ms": 0,
+                "assertion_results": [],
+                "extracted_variables": {},
+                "error": str(e)
+            }
+        finally:
+            # 恢复原始状态
+            self._url, self._method = orig_url, orig_method
+            self._headers, self._params = orig_headers, orig_params
+            self._json, self._data = orig_json, orig_data
+            self._reset_state()
+        return result
+
 
 def api():
     """
@@ -1955,14 +2120,14 @@ def ai_api(model: str = None, system_prompt: str = None):
 def filter_response_data(**filters):
     """
     根据条件过滤响应数据
-    
+
     Args:
         **filters: 过滤条件，如status_code=200, test_name="API测试"
-        
+
     Returns:
         List[Dict]: 过滤后的响应数据列表
     """
-    return data_storage_manager.filter_responses(**filters)
+    return data_storage_manager.filter_data(**filters)
 
 def export_responses(output_file: str, format_type: str = 'json', **filters):
     """
@@ -2009,4 +2174,4 @@ def clear_storage():
     """
     清空所有存储的响应数据
     """
-    return data_storage_manager.clear_all()
+    return data_storage_manager.clear_memory_data()

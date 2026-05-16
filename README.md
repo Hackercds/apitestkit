@@ -1,17 +1,17 @@
 # apitestkit - API自动化测试框架
 
-一个功能强大、易于使用的API自动化测试框架，提供全面的API测试解决方案，支持复杂的测试场景和报告生成。
+一个功能强大、易于使用的API自动化测试框架，提供全面的API测试解决方案，支持复杂的测试场景和报告生成。**现已支持 Agent/MCP 集成调用**。
 
 ## 功能特性
 
-- 简洁易用的API请求接口
+- 简洁易用的API请求接口，支持链式调用
 - 强大的断言系统，支持多种断言方式
 - 灵活的配置管理，支持JSON/YAML配置文件
 - 完善的日志记录和敏感数据过滤
 - 丰富的报告生成功能（HTML/PDF/JSON/CSV/Excel）
 - 支持数据提取和变量替换
+- **支持 Agent/MCP 集成**，可通过标准化工具协议调用
 - 跨平台兼容性，支持Windows、Linux、macOS
-- 支持并发测试和性能测试
 
 ## 安装
 
@@ -24,14 +24,9 @@ pip install apitestkit
 ### 从源码安装
 
 ```bash
-# 克隆仓库
-git clone https://github.com/yourusername/apitestkit.git
+git clone https://github.com/Hackercds/apitestkit.git
 cd apitestkit
-
-# 安装依赖
 pip install -r requirements.txt
-
-# 安装包
 pip install -e .
 ```
 
@@ -40,452 +35,353 @@ pip install -e .
 ### 基本使用示例
 
 ```python
-from apitestkit.request.http_client import http_client
-from apitestkit.assertion.assertions import response_assertion
+from apitestkit import api
 
-# 发送GET请求
-response = http_client.get("https://api.example.com/users")
-
-# 断言响应状态码
-response_assertion.assert_status_code(response, 200)
-
-# 断言JSON响应内容
-response_assertion.assert_json_path(response, "$.data[0].name", "expected_name")
+# 发送GET请求并断言
+result = (
+    api()
+    .test("获取用户信息")
+    .get("https://jsonplaceholder.typicode.com/users/1")
+    .send()
+    .assert_status_code(200)
+    .assert_json_path("name", "Leanne Graham")
+    .extract("email", "email")  # 提取变量供后续使用
+)
 ```
 
-### 测试用例示例
+### 使用 ApiAdapter 直接请求
 
 ```python
-from apitestkit.test.test_case import TestCase
-from apitestkit.test.test_runner import test_runner
-from apitestkit.request.http_client import http_client
-from apitestkit.assertion.assertions import response_assertion
+from apitestkit import ApiAdapter
 
-class UserManagementTest(TestCase):
-    def setUp(self):
-        # 设置测试环境
-        self.base_url = "https://api.example.com"
-        http_client.base_url = self.base_url
-    
-    def test_get_user_list(self):
-        """测试获取用户列表接口"""
-        response = http_client.get("/users")
-        response_assertion.assert_status_code(response, 200)
-        response_assertion.assert_json_path_exists(response, "$.data")
-    
-    def tearDown(self):
-        # 清理测试环境
-        pass
+adapter = ApiAdapter()
+response = adapter.request(
+    method="GET",
+    url="https://jsonplaceholder.typicode.com/posts/1"
+)
+print(response.status_code)
+print(response.json())
+```
 
-# 运行测试
-if __name__ == "__main__":
-    result = test_runner.run_test(UserManagementTest)
-    print(f"测试结果: {result.passed}")
+### 变量提取与引用
+
+```python
+from apitestkit import api
+
+# 创建资源并提取ID
+api()\
+    .test("CRUD操作测试")\
+    .step("创建新帖子")\
+    .post("https://jsonplaceholder.typicode.com/posts")\
+    .json({"title": "测试标题", "body": "测试内容", "userId": 1})\
+    .send()\
+    .assert_status_code(201)\
+    .extract("post_id", "id")
+
+# 使用提取的变量
+api()\
+    .step("获取帖子详情")\
+    .get("https://jsonplaceholder.typicode.com/posts/{{post_id}}")\
+    .send()\
+    .assert_status_code(200)
+```
+
+## Agent / MCP 集成
+
+apitestkit 提供标准化的 MCP 工具协议，支持被 Agent 或 MCP 服务器调用。
+
+### MCP 工具调用示例
+
+```python
+from apitestkit.mcp import get_mcp_protocol, list_mcp_tools, call_mcp_tool
+
+# 列出所有可用工具
+tools = list_mcp_tools()
+print(tools)
+
+# 调用 HTTP GET 工具
+result = call_mcp_tool(
+    "http_get",
+    url="https://jsonplaceholder.typicode.com/users/1"
+)
+print(result.to_dict())
+
+# 调用断言工具
+result = call_mcp_tool(
+    "assert",
+    actual="hello",
+    expected="hello",
+    assertion_type="equals"
+)
+print(result.to_dict())
+```
+
+### MCP 工具列表
+
+| 工具名 | 描述 | 分类 |
+|--------|------|------|
+| http_get | 发送HTTP GET请求 | http |
+| http_post | 发送HTTP POST请求 | http |
+| http_put | 发送HTTP PUT请求 | http |
+| http_delete | 发送HTTP DELETE请求 | http |
+| assert | 执行断言验证 | assertion |
+| config_get | 获取配置值 | config |
+| config_set | 设置配置值 | config |
+| data_save | 保存数据到存储 | data |
+| data_get | 从存储获取数据 | data |
+
+### MCP 协议响应格式
+
+所有工具返回统一的 `ToolResponse` 格式：
+
+```python
+{
+    "success": true,                    # 是否完全成功
+    "status": "success",               # SUCCESS/FAILURE/PARTIAL
+    "tool_name": "http_get",            # 调用的工具名
+    "message": "GET请求成功",           # 人类可读的消息
+    "data": {...},                      # 工具返回的数据
+    "error": null                       # 错误信息（如果失败）
+}
+```
+
+### 导入方式
+
+```python
+# 方式1: 从包级别导入（MCP相关默认try-import，失败不报错）
+import apitestkit
+print(apitestkit._mcp_available)  # True/False
+
+# 方式2: 直接从mcp模块导入
+from apitestkit.mcp import MCPToolProtocol, get_mcp_protocol, call_mcp_tool
 ```
 
 ## 框架结构
 
 ```
 apitestkit/
-├── __init__.py      # 包初始化文件
-├── core/            # 核心功能模块
-│   ├── __init__.py  # 核心模块初始化
-│   ├── config.py    # 配置管理
-│   └── logger.py    # 日志管理
-├── request/         # 请求模块
-│   ├── __init__.py  # 请求模块初始化
-│   ├── http_client.py  # HTTP客户端
-│   └── auth/        # 认证子模块
-│       ├── __init__.py
-│       └── auth_manager.py  # 认证管理器
-├── assertion/       # 断言模块
-│   ├── __init__.py  # 断言模块初始化
-│   └── assertions.py  # 断言实现
-├── response/        # 响应模块
-│   ├── __init__.py  # 响应模块初始化
-│   └── response.py  # 响应处理
-├── extractor/       # 数据提取器模块
-│   ├── __init__.py  # 提取器模块初始化
-│   └── data_extractor.py  # 数据提取实现
-├── report/          # 报告模块
-│   ├── __init__.py  # 报告模块初始化
-│   ├── report_generator.py  # 报告生成
-│   └── charts_generator.py  # 图表生成
-├── test/            # 测试框架模块
-│   ├── __init__.py  # 测试框架初始化
-│   ├── test_case.py  # 测试用例基类
-│   ├── test_runner.py  # 测试运行器
-│   ├── test_suite.py  # 测试套件
-│   └── factory.py   # 测试工厂
-└── exception/       # 异常模块
-    ├── __init__.py  # 异常模块初始化
-    └── exceptions.py  # 异常定义
+├── __init__.py          # 包初始化，导出核心组件
+├── adapter/             # 适配器层
+│   ├── __init__.py
+│   ├── api_adapter.py   # API适配器（链式调用核心）
+│   └── api_decorators.py # 装饰器（api_test, http_get等）
+├── assertion/           # 断言模块
+│   ├── __init__.py
+│   └── assertions.py    # 断言实现（Assertions类）
+├── core/                 # 核心功能模块
+│   ├── __init__.py
+│   ├── config.py        # 配置管理（config_manager）
+│   ├── data_storage.py  # 数据存储（DataStorageManager）
+│   ├── exceptions.py    # 异常定义
+│   └── logger.py        # 日志管理
+├── mcp/                  # MCP/Agent集成协议层
+│   ├── __init__.py
+│   └── tool_protocol.py # MCP工具协议实现
+├── report/               # 报告模块
+│   ├── __init__.py
+│   ├── report_generator.py  # 报告生成器
+│   └── charts_generator.py  # 图表生成器
+└── test/                 # 测试框架模块
+    ├── __init__.py
+    └── test_runner.py    # 测试运行器（TestRunner）
 ```
 
 ## 核心模块
 
 ### 1. 配置管理 (ConfigManager)
 
-管理框架的全局配置，包括日志级别、超时时间、基础URL等。
-
 ```python
-from apitestkit.core.config import config_manager
+from apitestkit import config_manager
 
 # 设置配置
 config_manager.set('base_url', 'https://api.example.com')
 config_manager.set('log_level', 'DEBUG')
-config_manager.set('default_timeout', 60)
+
+# 获取配置
+print(config_manager.get('base_url'))
+
+# 从文件加载配置
+config_manager.load_config('config.yaml')
+
+# 嵌套配置
+config_manager.set('ai.temperature', 0.7)
+print(config_manager.get('ai.temperature'))
+```
+
+### 2. 断言功能 (Assertions)
+
+```python
+from apitestkit.assertion.assertions import Assertions
+
+asserter = Assertions()
+
+# 基础断言
+asserter.assert_equal(1, 1, "值相等")
+asserter.assert_contains("hello world", "world")
+asserter.assert_is_not_none("some value")
+
+# 响应断言
+response = adapter.request("GET", "https://api.example.com/data")
+asserter.assert_status_code(response, 200)
+asserter.assert_json_path(response, "data.name", "expected")
 ```
 
 ### 3. 日志管理 (LoggerManager)
 
-负责日志的记录和管理，支持不同级别的日志输出。
-
 ```python
-from apitestkit.core.logger import logger_manager
+from apitestkit import logger_manager
 
-# 记录日志
-logger_manager.info("这是一条信息日志")
-logger_manager.warning("这是一条警告日志")
-logger_manager.error("这是一条错误日志")
-logger_manager.debug("这是一条调试日志")
+logger_manager.info("信息日志")
+logger_manager.warning("警告日志")
+logger_manager.error("错误日志")
+logger_manager.debug("调试日志")
 ```
 
-### 4. 断言功能 (ResponseAssertion)
-
-提供丰富的响应断言方法，验证API响应是否符合预期。
+### 4. 数据存储 (DataStorageManager)
 
 ```python
-from apitestkit.core.assertions import assertions
+from apitestkit.core.data_storage import get_data_storage
 
-# 使用断言器
-response = api().get("/api/users").send().get_response()
-assertions.assert_status_code(response, 200)
-assertions.assert_json_path(response, "data.length", 10)
+storage = get_data_storage()
+
+# 保存数据
+storage.save_data("token", "abc123", scope="session")
+
+# 获取数据
+token = storage.get_data("token", scope="session", default="")
+
+# 清除数据
+storage.clear_memory_data()
 ```
 
-## 高级功能
-
-### 变量提取与引用
+### 5. 测试运行器 (TestRunner)
 
 ```python
-# 提取变量并在后续请求中使用
-api()\
-    .test("变量提取与引用测试")\
-    .step("登录并获取token")\
-    .post("/api/login")\
-    .json({"username": "test", "password": "password"})\
-    .send()\
-    .assert_status_code(200)\
-    .extract("token", "data.token")
+from apitestkit import TestRunner
 
-api()\
-    .step("使用token获取用户信息")\
-    .get("/api/user/info")\
-    .headers({"Authorization": "Bearer {{token}}"})\
-    .send()\
-    .assert_status_code(200)
+# 创建测试套件
+runner = TestRunner()
+
+# 添加测试用例
+runner.add_test_case(test_case_func)
+
+# 运行测试
+result = runner.run()
+
+# 生成报告
+report = result.generate_report()
 ```
 
-### Agent接口测试
+### 6. 报告生成
 
 ```python
-# 基本的Agent API测试
-ai_api()\
-    .test("大模型API测试")\
-    .step("测试文本生成")\
-    .base_url("https://api.example-llm.com")\
-    .ai_prompt("请简要介绍API测试")\
-    .ai_options({\
-        "model": "gpt-3.5-turbo",\
-        "temperature": 0.7,\
-        "max_tokens": 100\
-    })\
-    .post("/v1/chat/completions")\
-    .send()\
-    .assert_status_code(200)
+from apitestkit import ReportGenerator, generate_html_report
+
+# 生成HTML报告
+report_path = generate_html_report(results, output_dir="reports/")
+
+# 使用报告生成器
+generator = ReportGenerator(output_format="html")
+report = generator.generate(results)
 ```
 
-### 流式响应处理
+## 装饰器
+
+### @api_test
 
 ```python
-# 流式响应测试
-ai_api()\
-    .test("流式响应测试")\
-    .step("测试流式生成")\
-    .base_url("https://api.example-llm.com")\
-    .stream(enable=True, format="sse")\
-    .ai_prompt("请列出5个API测试工具")\
-    .ai_options({"model": "gpt-3.5-turbo", "stream": True})\
-    .post("/v1/chat/completions")\
-    .stream_extract("choices[0].delta.content", "stream_content")\
-    .send()
+from apitestkit import api_test
 
-# 获取完整流式内容
-full_content = api_instance.get_full_stream_content()
+@api_test(name="我的测试")
+def test_example():
+    api().get("https://api.example.com/data").send()
 ```
 
-### 请求参数构建
+### @http_get / @http_post 等
 
 ```python
-api()\
-    .test("参数构建测试")\
-    .step("发送带参数的请求")\
-    .get("/api/search")\
-    .params({"keyword": "test", "page": 1, "limit": 10})\
-    .headers({"Accept": "application/json"})\
-    .send()\
-    .assert_status_code(200)
+from apitestkit import http_get, http_post
 
-# 表单数据
-api()\
-    .step("发送表单数据")\
-    .post("/api/submit")\
-    .body({"name": "Test", "email": "test@example.com"})\
-    .send()\
-    .assert_status_code(201)
+@http_get("/users/{user_id}")
+def get_user(user_id):
+    pass
+
+@http_post("/users")
+def create_user(data):
+    pass
 ```
 
-### 完整断言示例
+## 配置系统
 
-```python
-api()\
-    .test("完整断言示例")\
-    .step("验证多种断言")\
-    .get("/api/status")\
-    .send()\
-    .assert_status_code(200) \
-    .assert_response_time(1000)  # 响应时间不超过1000ms\
-    .assert_contains("success")  # 响应内容包含"success"\
-    .assert_json_path("data.status", "online")  # JSON路径断言\
-    .assert_header("Content-Type", "application/json")  # 响应头断言
-```
-
-## 高级配置系统
-
-apitestkit 提供了强大的配置管理系统，支持多种配置方式和高级功能：
-
-### 核心功能
-
-- **多格式支持**：支持 JSON 和 YAML 格式配置文件
-- **环境变量替换**：配置中可使用 `${ENV_VAR}` 语法引用环境变量
-- **分层配置**：支持默认配置、环境特定配置和本地配置的自动加载
-- **嵌套配置访问**：支持点号分隔的嵌套键访问（如 `ai.temperature`）
-- **配置验证**：自动验证配置值的有效性
-- **环境变量加载**：支持从环境变量加载配置
-- **配置保存**：支持将当前配置保存为 JSON/YAML 文件
-
-### 主要配置项
+apitestkit 支持多格式配置和环境变量替换：
 
 ```yaml
-# 基础配置
+# config.yaml
 log_level: DEBUG
-log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 default_timeout: 60
 base_url: "https://api.example.com/v1"
 verify_ssl: false
 
-# HTTP 请求配置
+# 环境变量替换
 headers:
-  Content-Type: "application/json"
-  Authorization: "Bearer ${API_TOKEN}"  # 支持环境变量替换
+  Authorization: "Bearer ${API_TOKEN}"
 
-# AI/Agent 相关配置
+# AI配置
 ai:
   default_model: "gpt-4"
   temperature: 0.7
-  max_tokens: 2000
-  timeout: 30
-
-# 流式响应配置
-streaming:
-  chunk_size: 1024
-  default_format: "json"
-  max_buffer_size: 10485760  # 10MB
-
-# 重试配置
-retry:
-  enabled: true
-  max_retries: 3
-  backoff_factor: 0.3
-  status_codes: [500, 502, 503, 504]
-
-# 并发配置
-concurrency:
-  max_workers: 10
-  timeout: 300
 ```
 
-### 配置使用示例
-
 ```python
-from apitestkit.core.config import global_config
+# 加载配置
+config_manager.load_config('config.yaml')
 
-# 基本配置操作
-print(global_config.get('log_level'))  # 获取配置
-global_config.set('base_url', 'https://api.example.com')  # 设置配置
-
-# 嵌套配置访问
-global_config.set('ai.temperature', 0.5)  # 设置嵌套配置
-print(global_config.get('ai.default_model'))  # 获取嵌套配置
-
-# 加载配置文件
-global_config.load_config('config.yaml')  # 加载 YAML 文件
-global_config.load_config('config.json')  # 加载 JSON 文件
-
-# 加载默认配置链（default -> {env} -> local）
-global_config.load_default_configs()
-
-# 从环境变量加载配置
-global_config.from_environment(prefix='API_TEST_')
-
-# 获取 AI 特定配置
-ai_config = global_config.get_ai_config('gpt-4')
-streaming_config = global_config.get_streaming_config()
+# 从环境变量加载
+config_manager.from_environment(prefix='API_')
 
 # 保存配置
-global_config.save_config('saved_config.yaml')
+config_manager.save_config('saved_config.yaml')
 ```
 
-### 分层配置系统
+## 常见问题
 
-apitestkit 实现了智能的分层配置加载机制：
+### Q: 导入时提示 `ImportError`？
 
-1. **默认配置**：从 `config/default.json` 或 `config/default.yaml` 加载
-2. **环境配置**：从 `config/{环境名}.json` 或 `config/{环境名}.yaml` 加载
-3. **本地配置**：从 `config/local.json` 或 `config/local.yaml` 加载
+确保使用正确的导入路径：
+```python
+# 正确
+from apitestkit import api, ApiAdapter
+from apitestkit import config_manager
+from apitestkit.assertion.assertions import Assertions
 
-环境名可通过环境变量 `API_TEST_ENV` 设置，默认为 `development`。
+# 错误（文档与代码不一致，已修正）
+# from apitestkit.request.http_client import http_client  # 不存在
+# from apitestkit.core.assertions import assertions        # 路径错误
+```
 
-### 环境变量支持
+### Q: MCP工具不可用？
 
-- 配置文件中可使用 `${ENV_VAR}` 语法引用环境变量
-- 支持通过 `API_TEST_` 前缀的环境变量直接设置配置
-  - 如 `API_TEST_BASE_URL` 对应 `base_url`
-  - 下划线自动转换为点号，如 `API_TEST_AI_TEMPERATURE` 对应 `ai.temperature`
+MCP模块默认懒加载，如果失败不会影响主框架：
+```python
+import apitestkit
+print(apitestkit._mcp_available)  # 检查MCP是否可用
+```
 
-## 错误处理
-
-apitestkit提供了错误处理机制，方便捕获和处理API测试过程中的异常：
+### Q: 如何自定义断言？
 
 ```python
-try:
-    api()\
-        .test("错误处理测试")\
-        .step("测试异常处理")\
-        .get("/api/non-existent-endpoint")\
-        .send()\
-        .assert_status_code(200)
-except Exception as e:
-    # 处理异常
-    print(f"测试失败: {str(e)}")
+from apitestkit.assertion.assertions import Assertions
+
+class CustomAssertions(Assertions):
+    def assert_custom(self, actual, expected):
+        if actual != expected:
+            raise AssertionException(
+                f"自定义断言失败: {actual} != {expected}",
+                assertion_type="custom",
+                expected=expected,
+                actual=actual
+            )
 ```
-
-## 测试用例示例
-
-### 完整的CRUD操作测试
-
-```python
-from apitestkit import api
-from apitestkit.core.config import config_manager
-
-# 配置基础URL
-config_manager.set('base_url', 'https://jsonplaceholder.typicode.com')
-
-# 创建资源
-api()\
-    .test("CRUD操作测试")\
-    .step("创建新帖子")\
-    .post("/posts")\
-    .json({"title": "测试标题", "body": "测试内容", "userId": 1})\
-    .send()\
-    .assert_status_code(201)\
-    .extract("post_id", "id")
-
-# 读取资源
-api()\
-    .step("获取创建的帖子")\
-    .get("/posts/{{post_id}}")\
-    .send()\
-    .assert_status_code(200)\
-    .assert_json_path("title", "测试标题")
-
-# 更新资源
-api()\
-    .step("更新帖子")\
-    .put("/posts/{{post_id}}")\
-    .json({"title": "更新后的标题", "body": "更新后的内容", "userId": 1})\
-    .send()\
-    .assert_status_code(200)\
-    .assert_json_path("title", "更新后的标题")
-
-# 删除资源
-api()\
-    .step("删除帖子")\
-    .delete("/posts/{{post_id}}")\
-    .send()\
-    .assert_status_code(200)
-```
-
-## 开发和扩展
-
-### 自定义断言
-
-可以扩展ResponseAssertion类来添加自定义断言方法：
-
-```python
-from apitestkit.core.assertions import ResponseAssertion
-
-# 扩展断言器
-class CustomAssertions(ResponseAssertion):
-    def assert_response_schema(self, schema):
-        # 自定义JSON Schema验证
-        import jsonschema
-        jsonschema.validate(self.response.json(), schema)
-        return self
-```
-
-### 自定义中间件
-
-可以通过装饰器添加自定义中间件处理请求和响应：
-
-```python
-from apitestkit.core.decorators import request_middleware
-
-@request_middleware
-def add_custom_header(request):
-    # 在请求发送前添加自定义头部
-    request.headers['X-Custom-Header'] = 'custom-value'
-    return request
-```
-
-### Agent接口参数模板
-
-可以创建和使用Agent接口参数模板，提高测试效率：
-
-```python
-# 创建参数模板
-ai_api()\
-    .agent_params_template("qa_model", {\
-        "model": "gpt-3.5-turbo",\
-        "temperature": 0.5,\
-        "max_tokens": 200\
-    })\
-    .agent_params_template("creative_model", {\
-        "model": "gpt-4",\
-        "temperature": 0.9,\
-        "max_tokens": 500\
-    })
-
-# 使用参数模板
-ai_api()\
-    .use_agent_template("qa_model")\
-    .ai_prompt("什么是API测试？")
-```
-
-## 总结
-
-apitestkit提供了一个简单易用但功能强大的API测试工具包，适用于各种规模的API测试项目。通过链式调用API设计，使测试代码更加简洁易读；丰富的断言功能和变量提取机制，满足各种测试场景的需求。
 
 ## 许可证
 
